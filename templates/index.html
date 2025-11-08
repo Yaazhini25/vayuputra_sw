@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Drone Base Station</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    body{margin:0;font-family:system-ui,Segoe UI,Roboto,Arial}
+    .grid{display:grid;grid-template-columns: 2fr 1fr;gap:12px;padding:12px}
+    .card{border:1px solid #e5e7eb;border-radius:12px;padding:12px}
+    #map{height:380px;border-radius:8px}
+    .row{display:flex;gap:12px}
+    .kpi{flex:1;background:#f9fafb;border:1px solid #eee;border-radius:10px;padding:10px}
+    .kpi h4{margin:0 0 6px 0;font-size:12px;color:#555}
+    .kpi div{font-size:20px;font-weight:700}
+    .banner{padding:10px;border-radius:8px;margin-bottom:10px;display:none}
+    .warn{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412}
+    .danger{background:#fef2f2;border:1px solid #fecaca;color:#991b1b}
+    video, img {max-width:100%;height:auto;border-radius:8px}
+    .section-title{font-weight:700;margin:0 0 8px 0}
+    table{width:100%;border-collapse:collapse}
+    td{padding:6px 8px;border-bottom:1px solid #eee;font-size:14px}
+    .btn{padding:8px 10px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;cursor:pointer}
+  </style>
+</head>
+<body>
+  <div class="grid">
+    <div class="card">
+      <div class="section-title">Live Video</div>
+      <!-- If your source is MJPEG from /video_feed -->
+      <img id="video" src="http://<CAMERA_FEED_URL>" alt="Live Camera Feed" />
+      <!-- If you serve HLS instead, replace with an <video> + hls.js -->
+    </div>
+
+    <div class="card">
+      <div class="section-title">Telemetry</div>
+      <div id="banner" class="banner"></div>
+      <div class="row">
+        <div class="kpi"><h4>Latitude</h4><div id="lat">--</div></div>
+        <div class="kpi"><h4>Longitude</h4><div id="lon">--</div></div>
+      </div>
+      <div class="row">
+        <div class="kpi"><h4>Altitude (m)</h4><div id="alt">--</div></div>
+        <div class="kpi"><h4>Speed (m/s)</h4><div id="speed">--</div></div>
+      </div>
+      <div class="row">
+        <div class="kpi"><h4>Battery (%)</h4><div id="battery">--</div></div>
+        <div class="kpi"><h4>RSSI</h4><div id="rssi">--</div></div>
+      </div>
+      <table>
+        <tr><td>Yaw</td><td id="yaw">--</td></tr>
+        <tr><td>Pitch</td><td id="pitch">--</td></tr>
+        <tr><td>Roll</td><td id="roll">--</td></tr>
+      </table>
+      <div style="margin-top:8px">
+        <button id="switchCh" class="btn">Request Channel Switch</button>
+      </div>
+    </div>
+
+    <div class="card" style="grid-column: 1 / -1;">
+      <div class="section-title">Map & Waypoints</div>
+      <div id="map"></div>
+    </div>
+  </div>
+
+  <script>
+    const socket = io();
+
+    // Map setup
+    const map = L.map('map').setView([12.9716, 77.5946], 16);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+    const droneIcon = L.icon({
+      iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+      iconSize: [25,41], iconAnchor: [12,41]
+    });
+    const marker = L.marker([12.9716, 77.5946], {icon: droneIcon}).addTo(map);
+
+    // Optional: demo waypoints (replace with real plan)
+    const waypoints = [
+      [12.9716, 77.5946],
+      [12.9722, 77.5951],
+      [12.9711, 77.5960]
+    ];
+    const wpLine = L.polyline(waypoints, {color: '#2563eb'}).addTo(map);
+
+    // UI helpers
+    const ids = x => document.getElementById(x);
+    const banner = ids('banner');
+    function setBanner(msg, level){
+      if(!msg){ banner.style.display='none'; return; }
+      banner.textContent = msg;
+      banner.className = 'banner ' + (level||'warn');
+      banner.style.display = 'block';
+    }
+
+    // Telemetry handler
+    socket.on('telemetry', (t) => {
+      ids('lat').textContent = t.lat?.toFixed?.(6) ?? t.lat;
+      ids('lon').textContent = t.lon?.toFixed?.(6) ?? t.lon;
+      ids('alt').textContent = t.alt;
+      ids('speed').textContent = t.speed;
+      ids('battery').textContent = t.battery;
+      ids('rssi').textContent = t.rssi;
+      ids('yaw').textContent = t.orientation?.yaw;
+      ids('pitch').textContent = t.orientation?.pitch;
+      ids('roll').textContent = t.orientation?.roll;
+
+      // Move marker + keep map centered lightly
+      if(typeof t.lat === 'number' && typeof t.lon === 'number'){
+        marker.setLatLng([t.lat, t.lon]);
+      }
+
+      // Alerts
+      if(t.rssi !== undefined && t.rssi < 30){
+        setBanner('Weak signal (RSSI < 30). Consider switching channel.', 'warn');
+      } else if(t.battery !== undefined && t.battery < 15){
+        setBanner('Battery critically low (< 15%). Return to home!', 'danger');
+      } else {
+        setBanner('', '');
+      }
+    });
+
+    // Pilot action
+    ids('switchCh').addEventListener('click', () => {
+      const to_channel = prompt('Enter new RF channel (e.g., 1-11):');
+      if(!to_channel) return;
+      socket.emit('request_channel_switch', { to_channel });
+    });
+
+    socket.on('channel_switch_ack', (r) => {
+      alert('Channel switch requested → ' + (r.to_channel || '?'));
+    });
+  </script>
+</body>
+</html>
