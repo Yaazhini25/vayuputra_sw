@@ -7,7 +7,7 @@ UI Report → /telemetry
 
 
 UI calling backend
-1. Snapshot:
+1. Snapshot(solar panel before and after cleaning):
 curl -X POST http://localhost:8080/snapshot \
 -H "X-API-KEY: CAMERA_KEY_123"
 
